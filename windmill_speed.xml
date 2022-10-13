@@ -1,0 +1,8 @@
+<library path="lib/librm_windmill_speed">
+    <class
+            name="rm_windmill_speed/WindSpeed"
+            type="rm_windmill_speed::WindSpeed"
+            base_class_type="nodelet::Nodelet">
+    <description>This is a rm_windmill_speed plugin.</description>
+    </class>
+</library>
