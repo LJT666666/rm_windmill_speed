@@ -140,11 +140,7 @@ private:
 
     void speedSolution(InfoTarget& prev_target);
 
-    void get_Coordinate(Target& object);
-
     float getAngle();
-
-    float linesOrientation(const cv::Point2f& A1, const cv::Point2f& A2, const cv::Point2f& B1, const cv::Point2f& B2, int flag);
 
     bool updateHistory(const InfoTarget& info_target);
 

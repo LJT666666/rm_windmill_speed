@@ -42,7 +42,6 @@ namespace rm_windmill_speed
         if(!nh.getParam("re_predict", re_predict_))
             ROS_WARN("No re_predict specified");
 
-
         windmill_cfg_srv_ = new dynamic_reconfigure::Server<rm_windmill_speed::WindmillConfig>(ros::NodeHandle(nh_, "windmill_speed"));
         windmill_cfg_cb_ = [this](auto && PH1, auto && PH2) { windmillconfigCB(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2)); };
         windmill_cfg_srv_->setCallback(windmill_cfg_cb_);
@@ -173,60 +172,12 @@ namespace rm_windmill_speed
         FilteredMsg_pub_.publish(filtered_msg);
     }
 
-//    void WindSpeed::get_Coordinate(Target& object){
-//        float prev_total_x;
-//        float prev_total_y;
-//
-//        for (int i = 0;i < 2;i++){
-//            prev_total_x += object.points[2 * i];
-//            prev_total_y += object.points[2 * i + 1];
-//        }
-//        for (int i = 0;i < 2;i++){
-//            prev_total_x += object.points[2 * i + 6];
-//            prev_total_y += object.points[2 * i + 6 + 1];
-//        }
-//
-//        object.armor_center_points.x = prev_total_x * 0.25;
-//        object.armor_center_points.y = prev_total_y * 0.25;
-//        object.r_points.x = object.points[4];
-//        object.r_points.y = object.points[5];
-//    }
-
     float WindSpeed::getAngle() {
       cv::Point2d vec1(prev_fan_.armor_center_points.x, prev_fan_.armor_center_points.y);
       cv::Point2d vec2(last_fan_.armor_center_points.x, last_fan_.armor_center_points.y);
       auto costheta = static_cast<float>(vec1.dot(vec2) / (cv::norm(vec1) * cv::norm(vec2)));
       float angle = acos(costheta);
         return angle;
-    }
-
-//根据两直线上两点计算两直线夹角
-//当flag=0时返回弧度，当flag!=0时返回角度
-    float WindSpeed::
-    linesOrientation(const cv::Point2f& A1, const cv::Point2f& A2, const cv::Point2f& B1, const cv::Point2f& B2, int flag)
-    {
-        //【1】根据直线上两点计算斜率
-        float k_line1 = (A2.y - A1.y)/(A2.x - A1.x);
-        float k_line2 = (B2.y - B1.y) / (B2.x - B1.x);
-        if(B2.x == B1.x)
-            return 0;
-        //【2】根据两个斜率计算夹角
-        float tan_k;                            //直线夹角正切值
-        tan_k = (k_line2 - k_line1) / (1 + k_line2*k_line1);
-        float lines_arctan = atan(tan_k);            //反正切获取夹角
-//        ROS_INFO("kline1:%f", k_line1);
-//        ROS_INFO("kline2:%f", k_line2);
-//        ROS_INFO("tan_k:%f", tan_k);
-//        ROS_INFO("arctan_k:%f", lines_arctan);
-        //【3】以角度或弧度形式返回夹角
-        if (flag == 0)
-        {
-            return lines_arctan;
-        }
-        else
-        {
-            return lines_arctan* 180.0 / 3.1415926;
-        }
     }
 
     bool WindSpeed::updateHistory(const InfoTarget& info_target){
