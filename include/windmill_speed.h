@@ -8,6 +8,8 @@
 #include <vector>
 #include <cmath>
 #include <ros/ros.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_ros/transform_listener.h>
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
 #include <XmlRpcValue.h>
@@ -31,10 +33,9 @@ namespace rm_windmill_speed
     struct Target
     {
         std::vector<float> points;
-        cv::Point2f armor_center_points;
-        cv::Point2f r_points;
+        cv::Point3f armor_center_points;
+        cv::Point3f r_points;
         int label;
-        float prob;
     };
 
     struct InfoTarget
@@ -88,42 +89,50 @@ public:
 
   void onInit() override;
 private:
-  rm_msgs::TargetDetectionArray target_array_;
-  ros::Publisher target_pub_;
-  ros::NodeHandle nh_;
-  std::shared_ptr<image_transport::ImageTransport> it_;
-  image_transport::CameraSubscriber cam_sub_;
+    std::thread my_thread_;
+    rm_msgs::TargetDetectionArray target_array_;
+    ros::Publisher target_pub_;
+    ros::NodeHandle nh_;
     dynamic_reconfigure::Server<rm_windmill_speed::WindmillConfig>* windmill_cfg_srv_;  // server of dynamic config about armor
     dynamic_reconfigure::Server<rm_windmill_speed::WindmillConfig>::CallbackType windmill_cfg_cb_;
     void windmillconfigCB(rm_windmill_speed::WindmillConfig& config, uint32_t level);
 
-    //windspeed
+    /// transform
+    tf2_ros::TransformListener *tf_listener_;
+    tf2_ros::Buffer *tf_buffer_;
+    ros::Subscriber pose_targets_sub_;
+    ros::Publisher pose_targets_pub_;
+    bool is_fitting_succeeded_ = false;
+
+    ///windspeed
     bool init_flag_ = false;
     Target prev_fan_{};
     Target last_fan_{};
     ros::Time delat_t_{};
-    float wind_speed_{};
-    float mean_speed_;
-    float diff_threshold_ = 20;
+    double wind_speed_{};
+    double mean_speed_;
+    double diff_threshold_;
     std::vector<Target> objects_;
-    ros::Subscriber targets_sub_;
+    ros::Subscriber speed_targets_sub_;
     ros::Publisher OriginMsg_pub_;
     ros::Publisher FilteredMsg_pub_;
 
     ///predict
-    bool is_filter_readied_ = false;
+    bool re_predict_;
+    bool is_start_pred_;
     bool is_params_confirmed_ = false;
     std::deque<InfoTarget> history_info_;
-    const double max_rmse_ = 0.4;                                               //回归函数最大Cost
+    double max_rmse_;                                               //回归函数最大Cost
     const int max_timespan_ = 20000;                                         //最大时间跨度，大于该时间重置预测器(ms)
-    const int history_deque_len_cos = 250;                                  //大符全部参数拟合队列长度
-    const int history_deque_len_phase = 100;                                  //大符相位参数拟合队列长度
+    int history_deque_len_cos_;                                  //大符全部参数拟合队列长度
+    int history_deque_len_phase_;                                  //大符相位参数拟合队列长度
     double params_[4];
     InfoTarget last_target_;
 
     ///LowPassFilter
     LowPassFilter filter_;
     double cutoff_frequency_ = -1;
+
 
     bool updateFan(Target& object, const InfoTarget& prev_target);
 
@@ -133,24 +142,17 @@ private:
 
     void get_Coordinate(Target& object);
 
+    float getAngle();
+
     float linesOrientation(const cv::Point2f& A1, const cv::Point2f& A2, const cv::Point2f& B1, const cv::Point2f& B2, int flag);
 
     bool updateHistory(const InfoTarget& info_target);
 
-    bool predict();
+    void predict();
 
     double evalRMSE(double params[4]);
 
-    void callback(const sensor_msgs::ImageConstPtr& img, const sensor_msgs::CameraInfoConstPtr& info)
-  {
-    target_array_.header = info->header;
-    boost::shared_ptr<cv_bridge::CvImage> temp = boost::const_pointer_cast<cv_bridge::CvImage>(cv_bridge::toCvShare(img, "bgr8"));
-    if (!target_array_.detections.empty())
-      target_pub_.publish(target_array_);
-  }
-  std::thread my_thread_;
-  image_transport::Publisher image_pub_;
-
+    void poseCallback(const rm_msgs::TargetDetectionArray::ConstPtr& msg);
 };
 
 }  // namespace rm_windmill_speed

@@ -9,9 +9,11 @@
 <!--     output="screen"> -->
 <!--      --><!-- <param name="camera_SN" value="KE0200060392" /> -->
 <!-- </node> -->
+<node pkg="tf" type="static_transform_publisher" name="link1_broadcaster" args="1 0 0 0 0 0 1 odom camera_optical_frame 100" />
+
 
 <node pkg="nodelet" type="nodelet" name="windspeed"
     args="load rm_windmill_speed/WindSpeed $(arg manager_name)" >
-<!--     <rosparam file="$(find rm_windmill_speed)/config/opvn_proc.yaml" command="load" /> -->
+    <rosparam file="$(find rm_windmill_speed)/config/windmill.yaml" command="load" />
 </node>
 </launch>
