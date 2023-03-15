@@ -9,6 +9,7 @@
 #include <cmath>
 #include <ros/ros.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_ros/message_filter.h>
 #include <tf2_ros/transform_listener.h>
 #include <image_transport/image_transport.h>
 #include <cv_bridge/cv_bridge.h>
@@ -19,14 +20,20 @@
 #include <pluginlib/class_loader.h>
 #include <rm_msgs/TargetDetectionArray.h>
 #include <rm_msgs/TargetDetection.h>
+#include <rm_msgs/TrackData.h>
 #include <dynamic_reconfigure/server.h>
 #include <rm_windmill_speed/WindmillConfig.h>
 #include "rm_common/filters/lp_filter.h"
 #include "std_msgs/Float32.h"
-#include <ceres/ceres.h>
 #include <Eigen/Core>
+#include <Eigen/Dense>
+#include <opencv2/core/eigen.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/core.hpp>
+#include <ceres/ceres.h>
 
-using cv::Mat;
+
+using namespace cv;
 using namespace std;
 namespace rm_windmill_speed
 {
@@ -36,12 +43,27 @@ namespace rm_windmill_speed
         cv::Point3f armor_center_points;
         cv::Point3f r_points;
         int label;
+        Eigen::Matrix3d rmat;
+        Eigen::Vector3d tvec;
     };
 
     struct InfoTarget
     {
         ros::Time stamp;
         float speed;
+    };
+
+    struct PnPInfo
+    {
+        Eigen::Matrix3d rmat;
+        Eigen::Vector3d tvec;
+
+//        Eigen::Vector3d armor_cam;
+//        Eigen::Vector3d armor_world;
+//        Eigen::Vector3d R_cam;
+//        Eigen::Vector3d R_world;
+//        Eigen::Vector3d euler;
+//        Eigen::Matrix3d rmat;
     };
 
     struct CURVE_FITTING_COST /***曲线拟合损失***/
@@ -88,6 +110,7 @@ public:
   void initialize(ros::NodeHandle& nh);
 
   void onInit() override;
+
 private:
     std::thread my_thread_;
     rm_msgs::TargetDetectionArray target_array_;
@@ -133,6 +156,23 @@ private:
     LowPassFilter filter_;
     double cutoff_frequency_ = -1;
 
+    ///HitPoint
+    ros::Subscriber pnp_sub_;
+    ros::Subscriber points_sub_;
+    ros::Publisher track_pub_;
+    static sensor_msgs::CameraInfoConstPtr camera_info_;
+    cv::Matx33f cam_intrinsic_mat_k_;
+//    std::vector<double> dist_coefficients_;
+    cv::Matx<float, 1, 5> dist_coefficients_;
+    const double fan_length_ = 0.7; //大符臂长(R字中心至装甲板中心)
+    double angular_velocity_ = 0.8;
+    double delay_time_ = 0.5;
+
+//    void initializeOnlyOnce(sensor_msgs::CameraInfoConstPtr& camera_info);
+
+    Target pnp(const std::vector<cv::Point2f>& points_pic);
+
+    void pointsCallback(const rm_msgs::TargetDetectionArray::Ptr &msg);
 
     bool updateFan(Target& object, const InfoTarget& prev_target);
 
@@ -145,6 +185,10 @@ private:
     bool updateHistory(const InfoTarget& info_target);
 
     void predict();
+
+    std::vector<double> calcAimingAngleOffset(Target& object, double params[4], double t0, double t1, int mode);
+
+    cv::Point2f reproject(Eigen::Vector3d &xyz);
 
     double evalRMSE(double params[4]);
 

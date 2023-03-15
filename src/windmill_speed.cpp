@@ -42,6 +42,18 @@ namespace rm_windmill_speed
         if(!nh.getParam("re_predict", re_predict_))
             ROS_WARN("No re_predict specified");
 
+        std::vector<float> intrinsic;
+        std::vector<float> distortion;
+        if(!nh.getParam("/windspeed/camera_matrix/data", intrinsic))
+            ROS_WARN("No cam_intrinsic_mat_k specified");
+        if(!nh.getParam("/windspeed/distortion_coefficients/data", distortion))
+            ROS_WARN("No distortion specified");
+
+        cam_intrinsic_mat_k_ = cv::Matx<float, 3, 3>(intrinsic[0], intrinsic[1], intrinsic[2], intrinsic[3], intrinsic[4], intrinsic[5],
+                                                    intrinsic[6], intrinsic[7], intrinsic[8]);
+        std::cout << "intrinsic maxtric is: " << cam_intrinsic_mat_k_ << std::endl;
+        dist_coefficients_ = cv::Matx<float, 1, 5>(distortion[0], distortion[1], distortion[2], distortion[3], distortion[4]);
+
         windmill_cfg_srv_ = new dynamic_reconfigure::Server<rm_windmill_speed::WindmillConfig>(ros::NodeHandle(nh_, "windmill_speed"));
         windmill_cfg_cb_ = [this](auto && PH1, auto && PH2) { windmillconfigCB(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2)); };
         windmill_cfg_srv_->setCallback(windmill_cfg_cb_);
@@ -49,9 +61,30 @@ namespace rm_windmill_speed
         tf_buffer_ = new tf2_ros::Buffer(ros::Duration(10));
         tf_listener_ = new tf2_ros::TransformListener(*tf_buffer_);
 
+//        sensor_msgs::CameraInfoConstPtr camera_info{};
+//        pnp_sub_ = nh.subscribe<sensor_msgs::CameraInfo>(
+//                "/galaxy_camera/camera_info", 10,
+//                [&camera_info](const sensor_msgs::CameraInfoConstPtr& info) -> void { camera_info = info; });
+
+//        ROS_ASSERT(camera_info != nullptr);
+//        if (camera_info == nullptr)
+//            cout << camera_info->K.data() << endl;
+//        memcpy(cam_intrinsic_mat_k_.data, camera_info->K.data(), 9 * sizeof(double));
+//        if (camera_info != nullptr)
+//            cout << camera_info->K.data() << endl;
+//            ROS_INFO("777");
+//        while (camera_info == nullptr && ros::ok())
+//            ros::spinOnce();  // Spin until camera info is grabbed.
+//
+//        initializeOnlyOnce(camera_info);
+
+        points_sub_ = nh.subscribe("/processor/result_msg", 1, &WindSpeed::pointsCallback, this);
+
         speed_targets_sub_ = nh.subscribe("/prediction", 1, &WindSpeed::speedCallback, this);
         OriginMsg_pub_ = nh.advertise<std_msgs::Float32>("origin_speed", 1);
         FilteredMsg_pub_ = nh.advertise<std_msgs::Float32>("filtered_speed", 1);
+
+        track_pub_ = nh.advertise<rm_msgs::TrackData>("/track", 10);
 
 //        pose_targets_sub_ = nh.subscribe("/detection", 1, &WindSpeed::poseCallback, this);
 //        pose_targets_pub_ = nh.advertise<decltype(target_array_)>("/windmill_track", 1);
@@ -65,6 +98,9 @@ namespace rm_windmill_speed
         history_deque_len_cos_ = config.history_deque_len_cos;
         history_deque_len_phase_ = config.history_deque_len_phase;
         re_predict_ = config.re_predict;
+
+        angular_velocity_ = config.angular_velocity;
+        delay_time_ = config.angular_velocity;
 
 //        target_type_ = config.target_color;
     }
@@ -119,6 +155,143 @@ namespace rm_windmill_speed
                     predict();
         }
 
+    }
+
+//    void WindSpeed::initializeOnlyOnce(sensor_msgs::CameraInfoConstPtr& camera_info){
+//        ROS_INFO("POINTS");
+//
+//        memcpy(cam_intrinsic_mat_k_.data, camera_info->K.data(), 9 * sizeof(double));
+//        dist_coefficients_ = camera_info->D;
+//    }
+
+    Target WindSpeed::pnp(const std::vector<Point2f>& points_pic)
+    {
+        std::vector<Point3d> points_world;
+
+//        //长度为5进入大符模式
+//        points_world = {
+//                {-0.1125,0.027,0},
+//                {-0.1125,-0.027,0},
+////                {0,-0.7,-0.05},
+//                {0.1125,-0.027,0},
+//                {0.1125,0.027,0}};
+//        points_world = {
+//                {-0.066,-0.027,0},
+//                {-0.066,0.027,0},
+//                {0.066,0.027,0},
+//                {0.066,-0.027,0}};
+         points_world = {
+         {-0.14,-0.08,0},
+         {-0.14,0.08,0},
+//         {0,-0.565,-0.05},
+         {0.14,0.08,0},
+         {0.14,-0.08,0}};
+
+        Mat rvec;
+        Mat rmat;
+        Mat tvec;
+        Eigen::Matrix3d rmat_eigen;
+        Eigen::Vector3d R_center_world = {0,-0.7,-0.05};
+        Eigen::Vector3d tvec_eigen;
+        Eigen::Vector3d coord_camera;
+
+        solvePnP(points_world, points_pic, cam_intrinsic_mat_k_, dist_coefficients_, rvec, tvec, false, SOLVEPNP_ITERATIVE);
+
+        std::array<double, 3> trans_vec = tvec.reshape(1, 1);
+        ROS_INFO("x:%f, y:%f, z:%f", trans_vec[0], trans_vec[1], trans_vec[2]);
+
+        Target result;
+//        //Pc = R * Pw + T
+        cv::Rodrigues(rvec, rmat); /***罗德里格斯变换，把旋转向量转换为旋转矩阵***/
+        cv::cv2eigen(rmat, rmat_eigen);/***cv转成eigen格式***/
+        cv::cv2eigen(tvec, tvec_eigen);
+//
+        result.rmat = rmat_eigen;
+        result.tvec = tvec_eigen;
+
+        return result;
+    }
+
+    void WindSpeed::pointsCallback(const rm_msgs::TargetDetectionArray::Ptr &msg){
+
+        rm_msgs::TrackData track_data;
+        track_data.header.frame_id = "base_link";
+        track_data.header.stamp = msg->header.stamp;
+        track_data.id = 0;
+        if(msg->detections[0].id == 0){
+            track_pub_.publish(track_data);
+            return;
+        }
+
+//        if (msg->detections.empty()){
+//            track_pub_.publish(track_data);
+//            return;
+//        }
+
+//        ROS_INFO("POINTS");
+        int32_t data[4 * 2];                        // data of 4 2D points
+        for (const auto &detection : msg->detections) {
+            memcpy(&data[0], &detection.pose.orientation.x, sizeof(int32_t) * 2);
+            memcpy(&data[2], &detection.pose.orientation.y, sizeof(int32_t) * 2);
+            memcpy(&data[4], &detection.pose.orientation.z, sizeof(int32_t) * 2);
+            memcpy(&data[6], &detection.pose.orientation.w, sizeof(int32_t) * 2);
+        }
+
+        std::vector<Point2f> pic_points;
+        for (int i = 0; i < 4; i++){
+            Point2f point;
+            point.x = float(data[2*i]);
+            point.y = float(data[2*i+1]);
+            pic_points.emplace_back(point);
+//            ROS_INFO("x%f, y%f", point.x, point.y);
+        }
+
+        Target hit_target = pnp(pic_points);
+
+        double params[4];
+        params[3] = angular_velocity_;
+        double t0 = 0;
+        double t1 = delay_time_;
+        int mode = 0;
+        std::vector<double> hit_point = calcAimingAngleOffset(hit_target, params, t0, t1, mode);
+        ROS_INFO("x%f, y%f, z%f", hit_point[0], hit_point[1], hit_point[2]);
+
+        rm_msgs::TargetDetection detection_temp;
+        detection_temp.pose.position.x = hit_point[0];
+        detection_temp.pose.position.y = hit_point[1];
+        detection_temp.pose.position.z = hit_point[2];
+
+        geometry_msgs::PoseStamped pose_in;
+        geometry_msgs::PoseStamped pose_out;
+        pose_in.header.frame_id = msg->header.frame_id;
+        pose_in.header.stamp = msg->header.stamp;
+        pose_in.pose = detection_temp.pose;
+
+        try
+        {
+            geometry_msgs::TransformStamped transform = tf_buffer_->lookupTransform(
+                    "base_link", pose_in.header.frame_id, msg->header.stamp, ros::Duration(1));
+
+            tf2::doTransform(pose_in.pose, pose_out.pose, transform);
+        }
+        catch (tf2::TransformException &ex)
+        {
+            ROS_WARN("%s", ex.what());
+        }
+//    ROS_INFO_STREAM(pose_out.pose.position.x
+//                    << ",y:" << pose_out.pose.position.y
+//                    << ",z:" << pose_out.pose.position.z);
+        detection_temp.pose = pose_out.pose;
+
+        track_data.id = 3;
+        track_data.target_pos.x = detection_temp.pose.position.x;
+        track_data.target_pos.y = detection_temp.pose.position.y;
+        track_data.target_pos.z = detection_temp.pose.position.z;
+        track_data.target_vel.x = 0;
+        track_data.target_vel.y = 0;
+        track_data.target_vel.z = 0;
+
+        track_pub_.publish(track_data);
     }
 
     bool WindSpeed::updateFan(Target& object, const InfoTarget& prev_target) {
@@ -325,6 +498,44 @@ namespace rm_windmill_speed
         ROS_INFO("Objective function is : f(x) = %f * sin[%f * t + (%f)] + %f", a, omega, theta, b);
         is_start_pred_ = false;
         is_fitting_succeeded_ = true;
+    }
+
+    std::vector<double> WindSpeed::calcAimingAngleOffset(Target& object, double params[4], double t0, double t1 , int mode)
+    {
+        auto a = params[0];
+        auto omega = params[1];
+        auto theta = params[2];
+        auto b = params[3];
+        double theta1;
+        double theta0;
+        // cout<<"t1: "<<t1<<endl;
+        // cout<<"t0: "<<t0<<endl;
+        //f(x) = a * sin(ω * t + θ) + b
+        //对目标函数进行积分
+        if (mode == 0)//适用于小符模式
+        {
+            theta0 = b * t0;
+            theta1 = b * t1;
+        }
+        else
+        {
+            theta0 = (b * t0 - (a / omega) * cos(omega * t0 + theta));
+            theta1 = (b * t1 - (a / omega) * cos(omega * t1 + theta));
+        }
+        // cout<<(theta1 - theta0) * 180 / CV_PI<<endl;
+//        return theta1 - theta0;
+        double theta_offset = theta1 - theta0;
+        ROS_INFO("theta1%f, theta0%f, b%f", theta1, theta0, b);
+        Eigen::Vector3d hit_point_world = {-sin(theta_offset) * fan_length_, -(cos(theta_offset) - 1) * fan_length_,0};
+        Eigen::Vector3d hit_point_cam= (object.rmat * hit_point_world) + object.tvec;
+        std::cout << "hit_point_world.transpose() = \n" << hit_point_world.transpose() << std::endl;
+        std::cout << "hit_point_cam.transpose() = \n" << hit_point_cam.transpose() << std::endl;
+        std::vector<double> hit_points;
+        hit_points.emplace_back(hit_point_cam.transpose()[0]);
+        hit_points.emplace_back(hit_point_cam.transpose()[1]);
+        hit_points.emplace_back(hit_point_cam.transpose()[2]);
+
+        return hit_points;
     }
 
     double WindSpeed::evalRMSE(double params[4])
